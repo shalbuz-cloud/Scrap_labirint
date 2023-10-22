@@ -1,8 +1,10 @@
 import time
 from datetime import datetime
-import csv
 import platform
+
+import aiofiles
 import asyncio
+from aiocsv import AsyncWriter
 
 from bs4 import BeautifulSoup
 import aiohttp
@@ -96,25 +98,13 @@ async def gather_data(url):
         await asyncio.gather(*tasks)
 
 
-def main():
-    # get_data()
-
-    cur_time = datetime.now().strftime('%d-%m-%Y-%H-%M')
-    file_name = "prices_%s.csv" % cur_time
-
-    url = "/".join([BASE_URL, "genres/2308/?available=1&paperbooks=1"])
-
-    import platform
-    if platform.system() == 'Windows':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    asyncio.run(gather_data(url))
-
-    loop = asyncio.get_runnig_loop()
-
-    with open(file_name, 'w', encoding='cp1251', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(
+async def write_csv(file_name: str, mode: str = 'w+'):
+    """
+    Write the extracted content into the file
+    """
+    async with aiofiles.open(file_name, mode, encoding='cp1251', newline='') as file:
+        writer = AsyncWriter(file)
+        await writer.writerow(
             (
                 "Название книги",
                 "Автор",
@@ -125,7 +115,7 @@ def main():
             )
         )
         for book in books_data:
-            writer.writerow(
+            await writer.writerow(
                 (
                     book['title'],
                     book['author'],
@@ -135,6 +125,21 @@ def main():
                     book['new_price'],
                 )
             )
+
+
+def main():
+    # get_data()
+
+    cur_time = datetime.now().strftime('%d-%m-%Y-%H-%M')
+    file_name = "prices_%s.csv" % cur_time
+
+    url = "/".join([BASE_URL, "genres/2308/?available=1&paperbooks=1"])
+
+    if platform.system() == 'Windows':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    asyncio.run(gather_data(url))
+    asyncio.run(write_csv(file_name))
 
     finish_time = time.time() - START_TIME
     print('\nThe program was running for %.2f sec.' % finish_time)
