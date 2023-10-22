@@ -1,10 +1,14 @@
-import sys
 import time
 from datetime import datetime
 import csv
+import platform
+import asyncio
 
-import requests
 from bs4 import BeautifulSoup
+import aiohttp
+
+from utils.interface import loading_bar
+from config import headers
 
 BASE_URL = "https://www.labirint.ru"
 START_TIME = time.time()
@@ -12,55 +16,13 @@ START_TIME = time.time()
 books_data = []
 
 
-def loading_bar(count, total, text, size, symbol=1):
-    percent = float(count) / float(total) * 100
-    symbols = {1: '█', 2: '#', 3: '='}
+async def get_page_data(session: aiohttp.ClientSession, url: str, page: int):
+    url += "&page=%i" % page
 
-    sys.stdout.write(
-        '\r' + text + str(int(count)).rjust(3, '0') + "/" + str(int(total)).rjust(3, '0') + ' |' +
-        symbols[symbol] * int(percent / 10) * size + ' ' * (10 - int(percent / 10)) * size + '|'
-    )
+    async with session.get(url, headers=headers) as response:
+        response_text = await response.text()
 
-
-def get_data():
-    cur_time = datetime.now().strftime('%d-%m-%Y-%H-%M')
-    file_name = "prices_%s.csv" % cur_time
-
-    with open(file_name, 'w', encoding='cp1251', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(
-            (
-                'Название книги',
-                'Автор',
-                'Издательство',
-                'Старая цена',
-                'Процент скидки',
-                'Новая цена',
-            )
-        )
-
-    headers = {
-        "Accept": "text / html, application / xhtml + xml, application / "
-                  "xml;q = 0.9, image / avif, image / webp, image / apng, "
-                  "* / *;q = 0.8, application / signed - exchange;v = b3;q = "
-                  "0.7",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/118.0.0.0 Safari/537.36"
-    }
-
-    url = "/".join([BASE_URL, "genres/2308/?available=1&paperbooks=1"])
-
-    response = requests.get(url=url, headers=headers)
-    soup = BeautifulSoup(response.text, 'lxml')
-
-    pages_count = \
-        soup.find('div', class_='pagination-numbers').find_all('a')[-1].text
-
-    for page in range(1, int(pages_count) + 1):
-        url += "&page=%i" % page
-        response = requests.get(url=url, headers=headers)
-        soup = BeautifulSoup(response.text, 'lxml')
+        soup = BeautifulSoup(response_text, 'lxml')
 
         books_items = soup.find(
             'div', class_='genres-carousel__container'
@@ -107,28 +69,73 @@ def get_data():
                     }
                 )
 
-                with open(file_name, 'a', encoding='cp1251', newline='') as file:
-                    writer = csv.writer(file)
-                    writer.writerow(
-                        (
-                            title,
-                            author,
-                            publishing,
-                            old_price,
-                            discount,
-                            new_price,
-                        )
-                    )
-
             except IndexError as iex:
                 print('[Error] Index out of range', iex)
 
-        loading_bar(page, pages_count, 'Progress: ', 1)
-        time.sleep(1)
+        # loading_bar(page, pages_count, 'Progress: ', 1)
+        # time.sleep(1)
+
+
+async def gather_data(url):
+    """The function makes a list of tasks."""
+
+    url = "/".join([BASE_URL, "genres/2308/?available=1&paperbooks=1"])
+
+    async with aiohttp.ClientSession() as session:
+        response = await session.get(url, headers=headers)
+        soup = BeautifulSoup(await response.text(), 'lxml')
+        pages_count = int(soup.find('div', class_='pagination-numbers').find_all('a')[-1].text)
+
+        tasks = []
+
+        for page in range(1, pages_count):
+            task = asyncio.create_task(get_page_data(session, url, page))
+            tasks.append(task)
+            loading_bar(page, pages_count, 'Progress: ', 1)
+
+        await asyncio.gather(*tasks)
 
 
 def main():
-    get_data()
+    # get_data()
+
+    cur_time = datetime.now().strftime('%d-%m-%Y-%H-%M')
+    file_name = "prices_%s.csv" % cur_time
+
+    url = "/".join([BASE_URL, "genres/2308/?available=1&paperbooks=1"])
+
+    import platform
+    if platform.system() == 'Windows':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    asyncio.run(gather_data(url))
+
+    loop = asyncio.get_runnig_loop()
+
+    with open(file_name, 'w', encoding='cp1251', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            (
+                "Название книги",
+                "Автор",
+                "Издательство",
+                "Старая цена",
+                "Процент скидки",
+                "Новая цена",
+            )
+        )
+        for book in books_data:
+            writer.writerow(
+                (
+                    book['title'],
+                    book['author'],
+                    book['publishing'],
+                    book["old_price"],
+                    book['discount'],
+                    book['new_price'],
+                )
+            )
+
     finish_time = time.time() - START_TIME
     print('\nThe program was running for %.2f sec.' % finish_time)
 
